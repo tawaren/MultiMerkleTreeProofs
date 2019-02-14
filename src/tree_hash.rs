@@ -7,13 +7,10 @@ pub trait HashableNode {
 //Could be Optimized: If T had: genEmpty() & isEmpty() -- Then caller can use Option::None or 0x0000..0000 as empty
 pub struct TreeHash<T>(Vec<Option<T>>);
 
-impl<T:HashableNode+Clone+Debug> TreeHash<T> {
+impl<T:HashableNode+Clone> TreeHash<T> {
 
     pub fn new(root_level:usize) -> Self {
-        //vec![None;root_level+1] would have been more elegant but requires that T implements clone
-        let mut level_store = Vec::with_capacity(root_level+1);
-        for _ in 0..(root_level+1) {level_store.push(None)}
-        TreeHash(level_store)
+        TreeHash(vec![None;root_level+1])
     }
 
     //Normal tree hash would only expose a push_leaf(&mut self, leaf:T) {return self.push_node(0, leaf)}
@@ -25,6 +22,7 @@ impl<T:HashableNode+Clone+Debug> TreeHash<T> {
         self.0[level] = match &self.0[level] {
             None => Some(node),
             Some(existing) => {
+                //todo: implement the more classical non-recursive variant (this variant makes the max height dependent on stack depth
                 if !self.push_node( level+1, existing.hash_merge(node)) {
                     return false;
                 }
@@ -39,9 +37,10 @@ impl<T:HashableNode+Clone+Debug> TreeHash<T> {
     pub fn push_left_nodes(&mut self, level_indicators:u64, nodes:&[T]) -> bool{
         let mut indicator = level_indicators;
         let mut level = 0;
-        //init the precalced left nodes
+        //push the provided nodes
         for node in nodes {
             //find the level of the next node for this side
+            //todo: can we improve with some bit hacking??
             while indicator & 1 == 0 {
                 level+=1;
                 indicator >>= 1;
@@ -70,7 +69,7 @@ impl<T:HashableNode+Clone+Debug> TreeHash<T> {
                 return None
             }
         }
-        //return the the root hash
+        //return the root hash
         self.0.pop().unwrap_or_default()
     }
 }
