@@ -9,10 +9,9 @@ use std::fmt::Debug;
 use crate::tree_hash::*;
 use crate::path_utils::*;
 
-#[derive(Debug)]
-pub struct UnCompressedProof<T> {
-    pub auth_path: Vec<T>,
-    pub index:u64,
+pub trait Tree<T> {
+    fn get(&self, level:u32,index:u64)-> T;
+    fn height(&self) -> u32;
 }
 
 #[derive(Debug)]
@@ -22,44 +21,41 @@ pub struct CompressedProofs<T> {
 }
 
 //this soe extra memory for sorting
-pub fn compress_unsorted_proofs<T:Clone>(mut proofs:Vec<UnCompressedProof<T>>) -> CompressedProofs<T> {
-    let unsorted_indicies = proofs.iter().map(|p|p.index).collect();
-    proofs.sort_by(|a, b| a.index.cmp(&b.index));
-    let proof = compress_proofs(proofs);
+pub fn compress_unsorted_proofs<T:Clone,MT:Tree<T>>(tree:&MT, indices:Vec<u64>) -> CompressedProofs<T> {
+    let mut sorted_indices = indices.clone();
+    sorted_indices.sort();
+    let proof = compress_proofs(tree, sorted_indices);
     CompressedProofs {
-        indices: unsorted_indicies,
+        indices,
         tree_nodes: proof.tree_nodes
     }
 }
 //Note: requires that no 2 proofs have same index
 //todo: make a version accessing the tree directly eliminating the memory need for the auth paths
-pub fn compress_proofs<T:Clone>(proofs:Vec<UnCompressedProof<T>>) -> CompressedProofs<T> {
+pub fn compress_proofs<T,MT:Tree<T>>(tree:&MT, indices:Vec<u64>) -> CompressedProofs<T> {
     let mut tree_nodes = Vec::new();
-    let mut indices = Vec::with_capacity(proofs.len());
-    for (pos,UnCompressedProof{index,auth_path}) in proofs.iter().enumerate() {
+    for (pos,index) in indices.iter().enumerate() {
         //the height of the tree
-        let height = auth_path.len() as u32;
+        let height = tree.height();
         //top levels covered by leading index - Note: the +1 is their as the first node after the paths diverge must not be emitted as it is computed
-        let leading_trim = if pos > 0 {calc_unshared_path_len(proofs[pos-1].index, *index)} else {height};
+        let leading_trim = if pos > 0 {calc_unshared_path_len(indices[pos-1], *index)} else {height};
         //top levels covered by trailing index - Note: the +1 is their as the first node after the paths diverge must not be emitted as it is computed
-        let trailing_trim = if pos < (proofs.len()-1) {calc_unshared_path_len(proofs[pos+1].index, *index)} else {height};
+        let trailing_trim = if pos < (indices.len()-1) {calc_unshared_path_len(indices[pos+1], *index)} else {height};
         //trim and order the proof nodes (in traversal order for tree hash to consume when validating)
         //the leading nodes first
         tree_nodes.extend(
-            auth_path.iter().enumerate()
+            (0..leading_trim)
                 //keep the trailing that are not covered by an earlier path
-                .filter(|(level,n)|has_left_sibling_on_level(*index, *level) && *level < leading_trim as usize)
-                .map(|(_,n)|n.clone())
+                .filter(|level|has_left_sibling_on_level(*index, *level as usize))
+                .map(|level|tree.get(level, (*index >> level)-1))
         );
         //the trailing nodes after
         tree_nodes.extend(
-            auth_path.iter().enumerate()
+            (0..trailing_trim)
                 //keep the trailing that are not covered by a later path
-                .filter(|(level,n)|has_right_sibling_on_level(*index, *level) && *level < trailing_trim as usize)
-                .map(|(_,n)|n.clone())
+                .filter(|level|has_right_sibling_on_level(*index, *level as usize))
+                .map(|level|tree.get(level, (*index >> level)+1))
         );
-        //push the index
-        indices.push(*index)
     }
 
     CompressedProofs {
@@ -133,6 +129,20 @@ mod test {
         }
     }
 
+    struct VirtTree(u32);
+
+    impl Tree<IndexVirtHash> for VirtTree {
+        fn get(&self, level: u32, index: u64) -> IndexVirtHash {
+            assert!(level <= self.0);
+            let dist = (self.0 - level) as u64;
+            IndexVirtHash((1 << dist) + index)
+        }
+
+        fn height(&self) -> u32 {
+            self.0
+        }
+    }
+
     fn leaf_index(index:u64, height:u64) -> u64 {
         index + (1 << height)
     }
@@ -145,16 +155,7 @@ mod test {
         IndexVirtHash(1)
     }
 
-    fn virt_auth_for_index(index:u64, height:u64) -> Vec<IndexVirtHash> {
-        let leaf_index = leaf_index(index,height);
-        let mut auth = Vec::with_capacity(height as usize);
-        for l in 0..height {
-            auth.push(IndexVirtHash((leaf_index >> l)^1))
-        }
-        auth
-    }
-
-    const NUM_RAND_TRIES:u64 = 100000;
+    const NUM_RAND_TRIES:u64 = 10000;
     const NUM_MAX_HEIGHT:u64 = 32;          //averages to 2^28 Leafes
     const NUM_MAX_ELEM:u64 = 128;           //averages to 64 Leafes
 
@@ -164,16 +165,10 @@ mod test {
         for _ in 0..NUM_RAND_TRIES {
             let height = (rng.gen_range(0u64,NUM_MAX_HEIGHT)+1) as u64;
             let index =  rng.gen_range(0u64,1u64 << height);
-            let auth_path = virt_auth_for_index(index,height);
             let val = leaf_hash(index,height);
-            let comp_auth = compress_proofs(vec![UnCompressedProof { auth_path:auth_path.clone(), index}]);
+            let comp_auth = compress_proofs(&VirtTree(height as u32),vec![index]);
             assert_eq!(comp_auth.tree_nodes.len(), height as usize);
             assert_eq!(comp_auth.indices.len(), 1);
-
-            for a in auth_path {
-                assert!(comp_auth.tree_nodes.contains(&a))
-            }
-
         }
     }
 
@@ -184,9 +179,7 @@ mod test {
             let height = (rng.gen_range(0u64,NUM_MAX_HEIGHT)+1) as u64;
             let index =  0;
             let val = leaf_hash(index,height);
-            let auth_path = virt_auth_for_index(index,height);
-            let comp_auth = compress_proofs(vec![UnCompressedProof { auth_path:auth_path.clone(), index}]);
-            assert_eq!(auth_path, comp_auth.tree_nodes);
+            let comp_auth = compress_proofs(&VirtTree(height as u32), vec![index]);
             let res = calc_root_from_proof(height as u32,vec![val], comp_auth);
             assert_eq!(res,Some(root_hash(height)));
         }
@@ -199,9 +192,7 @@ mod test {
             let height = (rng.gen_range(0u64,NUM_MAX_HEIGHT)+1) as u64;
             let index =  (1 << height)-1;
             let val = leaf_hash(index,height);
-            let auth_path = virt_auth_for_index(index,height);
-            let comp_auth = compress_proofs(vec![UnCompressedProof { auth_path:auth_path.clone(), index}]);
-            assert_eq!(auth_path, comp_auth.tree_nodes);
+            let comp_auth = compress_proofs(&VirtTree(height as u32), vec![index]);
             let res = calc_root_from_proof(height as u32,vec![val], comp_auth);
             assert_eq!(res,Some(root_hash(height)));
         }
@@ -218,14 +209,11 @@ mod test {
             for _ in 0..amount {
                 indexes.insert(rng.gen_range(0u64,1u64 << height));
             }
-            let mut auths = Vec::with_capacity(indexes.len());
             let mut vals = Vec::with_capacity(indexes.len());
-            for index in indexes {
-                let auth_path = virt_auth_for_index(index,height);
-                auths.push(UnCompressedProof { auth_path, index});
-                vals.push(leaf_hash(index,height));
+            for index in &indexes {
+                vals.push(leaf_hash(*index,height));
             }
-            let comp_auth = compress_proofs(auths);
+            let comp_auth = compress_proofs(&VirtTree(height as u32), indexes.into_iter().collect());
             let res = calc_root_from_proof(height as u32,vals, comp_auth);
             assert_eq!(res,Some(root_hash(height)));
         }
@@ -238,9 +226,8 @@ mod test {
         for _ in 0..NUM_RAND_TRIES {
             let height = (rng.gen_range(0u64,NUM_MAX_HEIGHT)+1) as u64;
             let index =  rng.gen_range(0u64,1u64 << height);
-            let auth_path = virt_auth_for_index(index,height);
             let val = leaf_hash(index,height);
-            let comp_auth = compress_proofs(vec![UnCompressedProof { auth_path:auth_path.clone(), index}]);
+            let comp_auth = compress_proofs(&VirtTree(height as u32), vec![index]);
             let res = calc_root_from_proof(height as u32,vec![val], comp_auth);
             assert_eq!(res,Some(root_hash(height)));
         }
