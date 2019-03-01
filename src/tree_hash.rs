@@ -15,17 +15,12 @@ impl<T:HashableNode+Clone> TreeHash<T> {
 
     //Normal tree hash would only expose a push_leaf(&mut self, leaf:T) {return self.push_node(0, leaf)}
     pub fn push_node(&mut self, level:usize, node:T) -> bool {
-        if level >= self.0.len() {
-            return false
-        }
-
+        if level >= self.0.len() {  return false  }
         self.0[level] = match &self.0[level] {
             None => Some(node),
             Some(existing) => {
-                //todo: implement the more classical non-recursive variant (this variant makes the max height dependent on stack depth
-                if !self.push_node( level+1, existing.hash_merge(node)) {
-                    return false;
-                }
+                //todo: implement the more classical non-recursive variant (this variant makes the max height dependent on stack depth)
+                if !self.push_node( level+1, existing.hash_merge(node)) { return false; }
                 None
             },
         };
@@ -36,25 +31,16 @@ impl<T:HashableNode+Clone> TreeHash<T> {
     //Normal tree hash would not need this
     pub fn push_left_nodes(&mut self, level_indicators:u64, nodes:&[T]) -> bool{
         let mut indicator = level_indicators;
-        let mut level = 0;
         //push the provided nodes
         for node in nodes {
-            //find the level of the next node for this side
-            //todo: can we improve with some bit hacking??
-            while indicator & 1 == 0 {
-                level+=1;
-                indicator >>= 1;
-            }
-
+            //find the level of the next node on this side
+            let level = indicator.trailing_zeros() as usize;
             //process the node
-            if !self.push_node(level, node.clone()){
-                return false;
-            }
-
-            //up a level
-            level+=1;
-            indicator >>= 1;
+            if !self.push_node(level, node.clone()){ return false; }
+            //mark the level as used
+            indicator &= (indicator-1);
         }
+        //everything went well
         true
     }
 

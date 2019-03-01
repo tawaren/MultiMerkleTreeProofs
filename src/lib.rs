@@ -20,7 +20,7 @@ pub struct CompressedProofs<T> {
     pub tree_nodes: Vec<T>
 }
 
-//this soe extra memory for sorting
+//this does need extra memory for sorting
 pub fn compress_unsorted_proofs<T:Clone,MT:Tree<T>>(tree:&MT, indices:Vec<u64>) -> CompressedProofs<T> {
     let mut sorted_indices = indices.clone();
     sorted_indices.sort();
@@ -31,7 +31,6 @@ pub fn compress_unsorted_proofs<T:Clone,MT:Tree<T>>(tree:&MT, indices:Vec<u64>) 
     }
 }
 //Note: requires that no 2 proofs have same index
-//todo: make a version accessing the tree directly eliminating the memory need for the auth paths
 pub fn compress_proofs<T,MT:Tree<T>>(tree:&MT, indices:Vec<u64>) -> CompressedProofs<T> {
     let mut tree_nodes = Vec::new();
     for (pos,index) in indices.iter().enumerate() {
@@ -45,14 +44,14 @@ pub fn compress_proofs<T,MT:Tree<T>>(tree:&MT, indices:Vec<u64>) -> CompressedPr
         //the leading nodes first
         tree_nodes.extend(
             (0..leading_trim)
-                //keep the trailing that are not covered by an earlier path
+                //emit the trailing that are not covered by an earlier path
                 .filter(|level|has_left_sibling_on_level(*index, *level as usize))
                 .map(|level|tree.get(level, (*index >> level)-1))
         );
         //the trailing nodes after
         tree_nodes.extend(
             (0..trailing_trim)
-                //keep the trailing that are not covered by a later path
+                //emit the trailing that are not covered by a later path
                 .filter(|level|has_right_sibling_on_level(*index, *level as usize))
                 .map(|level|tree.get(level, (*index >> level)+1))
         );
@@ -155,7 +154,7 @@ mod test {
         IndexVirtHash(1)
     }
 
-    const NUM_RAND_TRIES:u64 = 10000;
+    const NUM_RAND_TRIES:u64 = 100000;
     const NUM_MAX_HEIGHT:u64 = 32;          //averages to 2^28 Leafes
     const NUM_MAX_ELEM:u64 = 128;           //averages to 64 Leafes
 
